@@ -1,5 +1,7 @@
+const BASE = "/realforeclose/data";
+
 async function loadDates() {
-  const response = await fetch("data/index.json");
+  const response = await fetch(`${BASE}/index.json`);
   if (!response.ok) {
     console.error("Could not load index.json");
     return;
@@ -35,7 +37,7 @@ async function loadDates() {
 async function loadCSV(file) {
   document.getElementById("selectedDate").innerText = file.replace(".csv", "");
 
-  const response = await fetch(`data/${file}`);
+  const response = await fetch(`${BASE}/${file}`);
   if (!response.ok) {
     console.error(`Could not load ${file}`);
     return;
