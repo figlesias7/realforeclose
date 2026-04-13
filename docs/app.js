@@ -1,5 +1,5 @@
 async function loadDates() {
-  const response = await fetch("../data/index.json");
+  const response = await fetch("data/index.json");
   const files = await response.json();
 
   const dateList = document.getElementById("dateList");
@@ -21,7 +21,7 @@ async function loadDates() {
 async function loadCSV(file) {
   document.getElementById("selectedDate").innerText = file.replace(".csv", "");
 
-  const response = await fetch(`../data/${file}`);
+  const response = await fetch(`data/${file}`);
   const text = await response.text();
 
   const rows = text.trim().split("\n").slice(1);
