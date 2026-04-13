@@ -5,16 +5,21 @@ import json
 import os
 import re
 from datetime import datetime
+from html import escape
 
 BASE_DOMAIN = "https://www.pinellas.realforeclose.com"
 CALENDAR_URL = f"{BASE_DOMAIN}/index.cfm?zaction=USER&zmethod=CALENDAR"
 
 DATA_DIR = "data"
-TODAY_FILE = os.path.join(DATA_DIR, f"{datetime.now().strftime('%Y-%m-%d')}.csv")
+DOCS_DIR = "docs"
+TODAY_STR = datetime.now().strftime("%Y-%m-%d")
+TODAY_FILE = os.path.join(DATA_DIR, f"{TODAY_STR}.csv")
 SEEN_FILE = os.path.join(DATA_DIR, "all_seen.csv")
 INDEX_FILE = os.path.join(DATA_DIR, "index.json")
+HTML_FILE = os.path.join(DOCS_DIR, "index.html")
 
 os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(DOCS_DIR, exist_ok=True)
 
 
 def load_seen():
@@ -38,6 +43,7 @@ def update_index():
     )
     with open(INDEX_FILE, "w", encoding="utf-8") as f:
         json.dump(files, f)
+    return files
 
 
 def clean_text(value: str) -> str:
@@ -85,9 +91,8 @@ def parse_waiting_records(section_text: str):
     rows = []
 
     for match in pattern.finditer(section_text):
-        address = clean_text(match.group("address"))
         rows.append({
-            "Property Address": address,
+            "Property Address": clean_text(match.group("address")),
             "Final Judgment": clean_text(match.group("judgment")),
             "Assessed Value": clean_text(match.group("assessed")),
             "Plaintiff Max Bid": clean_text(match.group("max_bid")),
@@ -120,6 +125,102 @@ def write_daily(rows):
             ])
 
 
+def read_csv_rows(path):
+    rows = []
+    if not os.path.exists(path):
+        return rows
+    with open(path, newline="", encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            rows.append(row)
+    return rows
+
+
+def build_html(index_files):
+    list_items = []
+    sections = []
+
+    for i, file in enumerate(index_files):
+        date_label = file.replace(".csv", "")
+        section_id = f"day-{date_label}"
+        active_class = "active" if i == 0 else ""
+
+        list_items.append(
+            f'<li><a href="#{section_id}" class="{active_class}">{escape(date_label)}</a></li>'
+        )
+
+        rows = read_csv_rows(os.path.join(DATA_DIR, file))
+        if rows:
+            body_rows = "\n".join(
+                f"""
+                <tr>
+                  <td>{escape(r.get("Property Address", ""))}</td>
+                  <td>{escape(r.get("Final Judgment", ""))}</td>
+                  <td>{escape(r.get("Assessed Value", ""))}</td>
+                  <td>{escape(r.get("Plaintiff Max Bid", ""))}</td>
+                  <td>{escape(r.get("Case #", ""))}</td>
+                  <td>{escape(r.get("Parcel ID", ""))}</td>
+                </tr>
+                """
+                for r in rows
+            )
+        else:
+            body_rows = '<tr><td colspan="6">No records</td></tr>'
+
+        sections.append(
+            f"""
+            <section id="{section_id}" class="day-section">
+              <h2>{escape(date_label)}</h2>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Property Address</th>
+                    <th>Final Judgment</th>
+                    <th>Assessed Value</th>
+                    <th>Plaintiff Max Bid</th>
+                    <th>Case #</th>
+                    <th>Parcel ID</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {body_rows}
+                </tbody>
+              </table>
+            </section>
+            """
+        )
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Daily New Foreclosures</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; margin: 20px; }}
+    h1 {{ margin-bottom: 16px; }}
+    ul {{ padding-left: 20px; }}
+    li {{ margin-bottom: 6px; }}
+    a {{ color: #0645ad; text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    table {{ border-collapse: collapse; width: 100%; margin-top: 10px; margin-bottom: 28px; }}
+    th, td {{ border: 1px solid #ccc; padding: 8px; text-align: left; vertical-align: top; }}
+    th {{ background: #f3f3f3; }}
+  </style>
+</head>
+<body>
+  <h1>Daily New Foreclosures</h1>
+  <ul>
+    {''.join(list_items) if list_items else '<li>No data files yet</li>'}
+  </ul>
+  {''.join(sections) if sections else '<p>No data files yet.</p>'}
+</body>
+</html>
+"""
+    with open(HTML_FILE, "w", encoding="utf-8") as f:
+        f.write(html)
+
+
 async def get_live_foreclosure_days(page):
     boxes = await page.locator(".CALBOX").all()
     days = []
@@ -146,7 +247,6 @@ async def get_live_foreclosure_days(page):
             "day": day_num,
             "active": active,
             "scheduled": scheduled,
-            "text": text,
         })
 
     return days
@@ -162,14 +262,13 @@ async def get_next_month_url(page):
         """
     )
 
+    candidates = []
     for link in links:
         href = link["href"]
-        text = clean_text(link["text"])
-        if "zmethod=calendar" in href.lower() and href and "selCalDate=" in href:
-            if ">" in text or text.lower().startswith("may") or text.lower().startswith("jun") or text.lower().startswith("jul") or text.lower().startswith("aug") or text.lower().startswith("sep") or text.lower().startswith("oct") or text.lower().startswith("nov") or text.lower().startswith("dec") or text.lower().startswith("jan") or text.lower().startswith("feb") or text.lower().startswith("mar") or text.lower().startswith("apr"):
-                return href
+        if "zmethod=calendar" in href.lower() and "selCalDate=" in href:
+            candidates.append(href)
 
-    return None
+    return candidates[-1] if candidates else None
 
 
 async def click_day(page, idx):
@@ -183,12 +282,10 @@ async def collect_month_data(page, month_url, seen_cases, new_rows):
     await page.wait_for_timeout(3500)
 
     days = await get_live_foreclosure_days(page)
-    print(f"Month page {month_url}")
-    print(f"Found {len(days)} live foreclosure days")
+    print(f"Found {len(days)} live foreclosure days in {month_url}")
 
     for item in days:
         print(f"Opening day {item['day']} with {item['active']} live auctions")
-
         await page.goto(month_url, wait_until="domcontentloaded")
         await page.wait_for_timeout(2500)
 
@@ -247,7 +344,8 @@ async def scrape():
 
     write_daily(new_rows)
     save_seen(seen_cases)
-    update_index()
+    index_files = update_index()
+    build_html(index_files)
     print(f"Saved {len(new_rows)} new records")
 
 
