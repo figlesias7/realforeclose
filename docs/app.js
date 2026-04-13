@@ -1,9 +1,18 @@
 async function loadDates() {
   const response = await fetch("data/index.json");
-  const files = await response.json();
+  if (!response.ok) {
+    console.error("Could not load index.json");
+    return;
+  }
 
+  const files = await response.json();
   const dateList = document.getElementById("dateList");
   dateList.innerHTML = "";
+
+  if (!files.length) {
+    document.getElementById("selectedDate").innerText = "No data files found";
+    return;
+  }
 
   files.forEach(file => {
     const li = document.createElement("li");
@@ -11,33 +20,44 @@ async function loadDates() {
 
     a.href = "#";
     a.innerText = file.replace(".csv", "");
-    a.onclick = () => loadCSV(file);
+    a.addEventListener("click", async (e) => {
+      e.preventDefault();
+      await loadCSV(file);
+    });
 
     li.appendChild(a);
     dateList.appendChild(li);
   });
+
+  await loadCSV(files[0]);
 }
 
 async function loadCSV(file) {
   document.getElementById("selectedDate").innerText = file.replace(".csv", "");
 
   const response = await fetch(`data/${file}`);
-  const text = await response.text();
+  if (!response.ok) {
+    console.error(`Could not load ${file}`);
+    return;
+  }
 
-  const rows = text.trim().split("\n").slice(1);
+  const text = await response.text();
+  const rows = text.trim().split(/\r?\n/).slice(1);
   const tbody = document.querySelector("#dataTable tbody");
   tbody.innerHTML = "";
 
   rows.forEach(row => {
-    const cols = parseCSVRow(row);
-    if (cols.length === 0) return;
+    if (!row.trim()) return;
 
+    const cols = parseCSVRow(row);
     const tr = document.createElement("tr");
+
     cols.forEach(col => {
       const td = document.createElement("td");
       td.innerText = col;
       tr.appendChild(td);
     });
+
     tbody.appendChild(tr);
   });
 }
