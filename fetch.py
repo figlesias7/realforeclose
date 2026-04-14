@@ -1,6 +1,3 @@
-# ONLY CHANGE: added auction date safely
-# NOTHING ELSE TOUCHED
-
 import asyncio
 from playwright.async_api import async_playwright
 import csv
@@ -25,21 +22,31 @@ os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(DOCS_DIR, exist_ok=True)
 
 
-def load_seen():
+def clean_text(value: str) -> str:
+    return " ".join(str(value).replace("\xa0", " ").split())
+
+
+def load_seen() -> set[str]:
     if not os.path.exists(SEEN_FILE):
         return set()
+
+    seen = set()
     with open(SEEN_FILE, newline="", encoding="utf-8") as f:
-        return {row[0].strip() for row in csv.reader(f) if row and row[0].strip()}
+        reader = csv.reader(f)
+        for row in reader:
+            if row and row[0].strip():
+                seen.add(row[0].strip())
+    return seen
 
 
-def save_seen(seen):
+def save_seen(seen: set[str]) -> None:
     with open(SEEN_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         for case_no in sorted(seen):
             writer.writerow([case_no])
 
 
-def update_index():
+def update_index() -> list[str]:
     files = sorted(
         [f for f in os.listdir(DATA_DIR) if f.endswith(".csv") and f != "all_seen.csv"],
         reverse=True,
@@ -47,10 +54,6 @@ def update_index():
     with open(INDEX_FILE, "w", encoding="utf-8") as f:
         json.dump(files, f)
     return files
-
-
-def clean_text(value: str) -> str:
-    return " ".join(value.replace("\xa0", " ").split())
 
 
 def extract_auctions_waiting(text: str) -> str:
@@ -77,12 +80,12 @@ def extract_auctions_waiting(text: str) -> str:
     return section
 
 
-def parse_waiting_records(section_text: str):
+def parse_waiting_records(section_text: str) -> list[dict]:
     if not section_text:
         return []
 
     pattern = re.compile(
-        r"(?:Auction Starts\s*(?P<auction_date>\d{2}/\d{2}/\d{4}\s+\d{1,2}:\d{2}\s+[AP]M\s+ET).*?)?"
+        r"Auction Starts\s*(?P<auction_date>\d{2}/\d{2}/\d{4}\s+\d{1,2}:\d{2}\s+[AP]M\s+ET).*?"
         r"Case #:\s*(?P<case>\S+).*?"
         r"Final Judgment Amount:\s*(?P<judgment>\$[\d,]+\.\d{2}|Hidden).*?"
         r"Parcel ID:\s*(?P<parcel>\S+).*?"
@@ -95,20 +98,42 @@ def parse_waiting_records(section_text: str):
     rows = []
 
     for match in pattern.finditer(section_text):
+        address = clean_text(match.group("address"))
+
+        cut_markers = [
+            "Plaintiff Max Bid:",
+            "Auction Starts",
+            "Auction Type:",
+            "Case #:",
+            "Final Judgment Amount:",
+            "Parcel ID:",
+            "Property Address:",
+            "Assessed Value:",
+        ]
+        for marker in cut_markers:
+            pos = address.find(marker)
+            if pos != -1:
+                address = address[:pos].strip()
+
+        case_no = clean_text(match.group("case"))
+        parcel_id = clean_text(match.group("parcel"))
+
         rows.append({
-            "Auction Date": clean_text(match.group("auction_date") or ""),
-            "Property Address": clean_text(match.group("address")),
+            "Auction Date": clean_text(match.group("auction_date")),
+            "Property Address": address,
             "Final Judgment": clean_text(match.group("judgment")),
             "Assessed Value": clean_text(match.group("assessed")),
             "Plaintiff Max Bid": clean_text(match.group("max_bid")),
-            "Case #": clean_text(match.group("case")),
-            "Parcel ID": clean_text(match.group("parcel")),
+            "Case #": case_no,
+            "Parcel ID": parcel_id,
+            "Case Link": f"{BASE_DOMAIN}/index.cfm?zaction=auction&zmethod=details&AID={case_no}&bypassPage=1",
+            "Parcel Link": f"https://pcpao.gov/Parcel-Details/{parcel_id}",
         })
 
     return rows
 
 
-def write_daily(rows):
+def write_daily(rows: list[dict]) -> None:
     with open(TODAY_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([
@@ -119,6 +144,8 @@ def write_daily(rows):
             "Plaintiff Max Bid",
             "Case #",
             "Parcel ID",
+            "Case Link",
+            "Parcel Link",
         ])
         for r in rows:
             writer.writerow([
@@ -129,30 +156,34 @@ def write_daily(rows):
                 r["Plaintiff Max Bid"],
                 r["Case #"],
                 r["Parcel ID"],
+                r["Case Link"],
+                r["Parcel Link"],
             ])
 
 
-def read_csv_rows(path):
+def read_csv_rows(path: str) -> list[dict]:
     rows = []
     if not os.path.exists(path):
         return rows
+
     with open(path, newline="", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            rows.append(row)
+            rows.append(dict(row))
     return rows
 
 
-def build_html(index_files):
+def build_html(index_files: list[str]) -> None:
     list_items = []
     sections = []
 
     for i, file in enumerate(index_files):
         date_label = file.replace(".csv", "")
         section_id = f"day-{date_label}"
+        active_class = "active" if i == 0 else ""
 
         list_items.append(
-            f'<li><a href="#{section_id}">{escape(date_label)}</a></li>'
+            f'<li><a href="#{section_id}" class="{active_class}">{escape(date_label)}</a></li>'
         )
 
         rows = read_csv_rows(os.path.join(DATA_DIR, file))
@@ -160,13 +191,13 @@ def build_html(index_files):
             body_rows = "\n".join(
                 f"""
                 <tr>
-                  <td>{escape(r.get("Auction Date",""))}</td>
-                  <td>{escape(r.get("Property Address",""))}</td>
-                  <td>{escape(r.get("Final Judgment",""))}</td>
-                  <td>{escape(r.get("Assessed Value",""))}</td>
-                  <td>{escape(r.get("Plaintiff Max Bid",""))}</td>
-                  <td>{escape(r.get("Case #",""))}</td>
-                  <td>{escape(r.get("Parcel ID",""))}</td>
+                  <td>{escape(r.get("Auction Date", ""))}</td>
+                  <td>{escape(r.get("Property Address", ""))}</td>
+                  <td>{escape(r.get("Final Judgment", ""))}</td>
+                  <td>{escape(r.get("Assessed Value", ""))}</td>
+                  <td>{escape(r.get("Plaintiff Max Bid", ""))}</td>
+                  <td><a href="{escape(r.get("Case Link", ""))}" target="_blank">{escape(r.get("Case #", ""))}</a></td>
+                  <td><a href="{escape(r.get("Parcel Link", ""))}" target="_blank">{escape(r.get("Parcel ID", ""))}</a></td>
                 </tr>
                 """
                 for r in rows
@@ -176,7 +207,7 @@ def build_html(index_files):
 
         sections.append(
             f"""
-            <section id="{section_id}">
+            <section id="{section_id}" class="day-section">
               <h2>{escape(date_label)}</h2>
               <table>
                 <thead>
@@ -198,72 +229,154 @@ def build_html(index_files):
             """
         )
 
-    html = f"""<html><body><h1>Daily New Foreclosures</h1>
-<ul>{''.join(list_items)}</ul>
-{''.join(sections)}
-</body></html>"""
-
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Daily New Foreclosures</title>
+  <style>
+    body {{ font-family: Arial, sans-serif; margin: 20px; }}
+    h1 {{ margin-bottom: 16px; }}
+    ul {{ padding-left: 20px; }}
+    li {{ margin-bottom: 6px; }}
+    a {{ color: #0645ad; text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    table {{ border-collapse: collapse; width: 100%; margin-top: 10px; margin-bottom: 28px; }}
+    th, td {{ border: 1px solid #ccc; padding: 8px; text-align: left; vertical-align: top; }}
+    th {{ background: #f3f3f3; }}
+  </style>
+</head>
+<body>
+  <h1>Daily New Foreclosures</h1>
+  <ul>
+    {''.join(list_items) if list_items else '<li>No data files yet</li>'}
+  </ul>
+  {''.join(sections) if sections else '<p>No data files yet.</p>'}
+</body>
+</html>
+"""
     with open(HTML_FILE, "w", encoding="utf-8") as f:
         f.write(html)
 
 
-async def get_live_foreclosure_days(page):
+async def get_month_info(page) -> tuple[list[dict], str | None]:
     boxes = await page.locator(".CALBOX").all()
     days = []
 
-    for idx, box in enumerate(boxes):
-        text = clean_text(await box.inner_text())
-
-        if "FC" not in text:
+    for idx in range(len(boxes)):
+        try:
+            box = page.locator(".CALBOX").nth(idx)
+            text = clean_text(await box.inner_text(timeout=3000))
+        except Exception:
             continue
 
-        m = re.search(r"(\d+)\s*/\s*(\d+)\s*FC", text)
+        if "Foreclosure" not in text or "FC" not in text:
+            continue
+
+        m = re.search(r"^(\d+).*?(\d+)\s*/\s*(\d+)\s*FC", text)
         if not m:
             continue
 
-        if int(m.group(1)) == 0:
+        day_num = int(m.group(1))
+        active = int(m.group(2))
+        scheduled = int(m.group(3))
+
+        if active <= 0:
             continue
 
-        days.append({"index": idx})
+        days.append({
+            "index": idx,
+            "day": day_num,
+            "active": active,
+            "scheduled": scheduled,
+        })
 
-    return days
+    next_month_url = None
+    links = await page.locator("a").evaluate_all(
+        """
+        els => els.map(a => ({
+            text: (a.innerText || a.textContent || '').trim(),
+            href: a.href || ''
+        }))
+        """
+    )
+    candidates = []
+    for link in links:
+        href = link["href"]
+        if "zmethod=calendar" in href.lower() and "selCalDate=" in href:
+            candidates.append(href)
+
+    if candidates:
+        next_month_url = candidates[-1]
+
+    return days, next_month_url
 
 
 async def scrape():
     seen_cases = load_seen()
-    rows = []
+    all_rows_for_today = []
+    visited_months = set()
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
         page = await browser.new_page()
 
-        await page.goto(CALENDAR_URL)
-        await page.wait_for_timeout(3000)
+        current_month_url = CALENDAR_URL
+        empty_month_streak = 0
 
-        days = await get_live_foreclosure_days(page)
+        while current_month_url and current_month_url not in visited_months:
+            visited_months.add(current_month_url)
 
-        for d in days:
-            await page.goto(CALENDAR_URL)
-            await page.wait_for_timeout(2000)
+            await page.goto(current_month_url, wait_until="domcontentloaded")
+            await page.wait_for_timeout(4000)
 
-            await page.locator(".CALBOX").nth(d["index"]).click()
-            await page.wait_for_timeout(5000)
+            days, next_month_url = await get_month_info(page)
+            print(f"Found {len(days)} live foreclosure days in {current_month_url}")
 
-            body = await page.locator("body").inner_text()
-            section = extract_auctions_waiting(body)
-            parsed = parse_waiting_records(section)
+            if not days:
+                empty_month_streak += 1
+                if empty_month_streak >= 1:
+                    break
+            else:
+                empty_month_streak = 0
 
-            for r in parsed:
-                if r["Case #"] not in seen_cases:
-                    rows.append(r)
-                    seen_cases.add(r["Case #"])
+            for item in days:
+                try:
+                    print(f"Opening day {item['day']} with {item['active']} live auctions")
+
+                    await page.goto(current_month_url, wait_until="domcontentloaded")
+                    await page.wait_for_timeout(2500)
+
+                    await page.locator(".CALBOX").nth(item["index"]).click(timeout=5000, force=True)
+                    await page.wait_for_timeout(5000)
+
+                    body_text = await page.locator("body").inner_text()
+                    waiting_text = extract_auctions_waiting(body_text)
+                    rows = parse_waiting_records(waiting_text)
+
+                    print(f"  Parsed {len(rows)} waiting records")
+
+                    for r in rows:
+                        case_no = r["Case #"]
+                        if not case_no:
+                            continue
+                        all_rows_for_today.append(r)
+                        seen_cases.add(case_no)
+
+                except Exception as e:
+                    print(f"skip day {item['day']} error: {e}")
+                    continue
+
+            current_month_url = next_month_url
 
         await browser.close()
 
-    write_daily(rows)
+    write_daily(all_rows_for_today)
     save_seen(seen_cases)
-    index = update_index()
-    build_html(index)
+    index_files = update_index()
+    build_html(index_files)
+    print(f"Saved {len(all_rows_for_today)} records for today")
 
 
 if __name__ == "__main__":
