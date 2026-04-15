@@ -1,0 +1,18 @@
+Python commands for future task
+
+py fetch.py
+py reconcile.py
+
+
+
+
+reference:
+
+git add -A
+git commit -m "add active and change tracking"
+git push
+
+
+the old 'it worked' page
+git reset --hard e4b891b
+git push --force
