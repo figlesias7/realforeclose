@@ -10,6 +10,9 @@ ACTIVE_FILE = os.path.join(DATA_DIR, "active_foreclosures.csv")
 EVENT_FILE = os.path.join(DATA_DIR, "event_log.csv")
 HTML_FILE = os.path.join(DOCS_DIR, "index.html")
 
+os.makedirs(DATA_DIR, exist_ok=True)
+os.makedirs(DOCS_DIR, exist_ok=True)
+
 
 def latest_snapshot_file():
     candidates = []
@@ -24,10 +27,8 @@ def latest_snapshot_file():
             candidates.append(name)
         except ValueError:
             continue
-
     if not candidates:
         return None
-
     return os.path.join(DATA_DIR, sorted(candidates, reverse=True)[0])
 
 
@@ -89,22 +90,7 @@ def normalize_row(row):
     }
 
 
-def build_html(new_today_rows, active_rows, event_rows):
-    new_today_body = "\n".join(
-        f"""
-        <tr>
-          <td>{escape(r.get("Auction Date", ""))}</td>
-          <td>{escape(r.get("Property Address", ""))}</td>
-          <td>{escape(r.get("Final Judgment", ""))}</td>
-          <td>{escape(r.get("Assessed Value", ""))}</td>
-          <td>{escape(r.get("Plaintiff Max Bid", ""))}</td>
-          <td>{escape(r.get("Case #", ""))}</td>
-          <td>{escape(r.get("Parcel ID", ""))}</td>
-        </tr>
-        """
-        for r in new_today_rows
-    ) or '<tr><td colspan="7">No new foreclosures today</td></tr>'
-
+def build_html(active_rows, event_rows):
     active_body = "\n".join(
         f"""
         <tr>
@@ -148,24 +134,6 @@ def build_html(new_today_rows, active_rows, event_rows):
   </style>
 </head>
 <body>
-  <h1>New Foreclosures Today</h1>
-  <table>
-    <thead>
-      <tr>
-        <th>Auction Date</th>
-        <th>Property Address</th>
-        <th>Final Judgment</th>
-        <th>Assessed Value</th>
-        <th>Plaintiff Max Bid</th>
-        <th>Case #</th>
-        <th>Parcel ID</th>
-      </tr>
-    </thead>
-    <tbody>
-      {new_today_body}
-    </tbody>
-  </table>
-
   <h1>Active Foreclosures</h1>
   <table>
     <thead>
@@ -219,7 +187,6 @@ def main():
     previous_by_case = {r["Case #"]: r for r in previous_rows if r.get("Case #")}
 
     timestamp = datetime.now().isoformat(timespec="seconds")
-    today_str = datetime.now().strftime("%Y-%m-%d")
 
     for case_no, row in latest_by_case.items():
         if case_no not in previous_by_case:
@@ -245,22 +212,10 @@ def main():
     event_rows = read_csv(EVENT_FILE)
     event_rows = sorted(event_rows, key=lambda r: r.get("Timestamp", ""), reverse=True)
 
-    new_today_case_nos = {
-        r.get("Case #", "")
-        for r in event_rows
-        if r.get("Action") == "NEW" and r.get("Timestamp", "").startswith(today_str)
-    }
-    new_today_rows = [
-        latest_by_case[case_no]
-        for case_no in new_today_case_nos
-        if case_no in latest_by_case
-    ]
-    new_today_rows = sorted(new_today_rows, key=lambda r: (r.get("Auction Date", ""), r.get("Case #", "")))
-
     active_rows = list(latest_by_case.values())
     active_rows = sorted(active_rows, key=lambda r: (r.get("Auction Date", ""), r.get("Case #", "")))
 
-    build_html(new_today_rows, active_rows, event_rows)
+    build_html(active_rows, event_rows)
 
     print(f"Snapshot: {os.path.basename(snapshot)}")
     print(f"Active cases: {len(active_rows)}")
