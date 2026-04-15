@@ -89,7 +89,7 @@ def normalize_row(row):
     }
 
 
-def build_html(new_today_rows, active_rows, closed_rows):
+def build_html(new_today_rows, active_rows, event_rows):
     new_today_body = "\n".join(
         f"""
         <tr>
@@ -120,7 +120,7 @@ def build_html(new_today_rows, active_rows, closed_rows):
         for r in active_rows
     ) or '<tr><td colspan="7">No active foreclosures</td></tr>'
 
-    closed_body = "\n".join(
+    event_body = "\n".join(
         f"""
         <tr>
           <td>{escape(r.get("Timestamp", ""))}</td>
@@ -130,8 +130,8 @@ def build_html(new_today_rows, active_rows, closed_rows):
           <td>{escape(r.get("Property Address", ""))}</td>
         </tr>
         """
-        for r in closed_rows[:100]
-    ) or '<tr><td colspan="5">No closed or canceled auctions</td></tr>'
+        for r in event_rows[:100]
+    ) or '<tr><td colspan="5">No changes logged</td></tr>'
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -184,7 +184,7 @@ def build_html(new_today_rows, active_rows, closed_rows):
     </tbody>
   </table>
 
-  <h2>Closed or Canceled Auctions</h2>
+  <h2>Recent Changes</h2>
   <table>
     <thead>
       <tr>
@@ -196,7 +196,7 @@ def build_html(new_today_rows, active_rows, closed_rows):
       </tr>
     </thead>
     <tbody>
-      {closed_body}
+      {event_body}
     </tbody>
   </table>
 </body>
@@ -260,12 +260,7 @@ def main():
     active_rows = list(latest_by_case.values())
     active_rows = sorted(active_rows, key=lambda r: (r.get("Auction Date", ""), r.get("Case #", "")))
 
-    closed_rows = [
-        r for r in event_rows
-        if r.get("Action") in {"CLOSED", "CANCELED"}
-    ]
-
-    build_html(new_today_rows, active_rows, closed_rows)
+    build_html(new_today_rows, active_rows, event_rows)
 
     print(f"Snapshot: {os.path.basename(snapshot)}")
     print(f"Active cases: {len(active_rows)}")
