@@ -309,7 +309,6 @@ async def get_month_info(page, current_month_url) -> tuple[list[dict], str | Non
 
     if candidates:
         next_month_url = candidates[-1]
-
     print("\n====================")
     print("CURRENT MONTH URL:", current_month_url)
     print("CANDIDATE CALENDAR LINKS:")
@@ -317,7 +316,6 @@ async def get_month_info(page, current_month_url) -> tuple[list[dict], str | Non
         print("  ", c)
     print("CHOSEN NEXT MONTH:", next_month_url)
     print("====================\n")
-
     return days, next_month_url
 
 
