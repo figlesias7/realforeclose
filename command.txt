@@ -2,7 +2,9 @@ Python commands for future task
 
 py fetch.py
 py reconcile.py
-
+git add -A
+git commit -m "update dashboard"
+git push
 
 
 
@@ -16,3 +18,24 @@ git push
 the old 'it worked' page
 git reset --hard e4b891b
 git push --force
+
+
+
+
+New Site:
+
+git init
+git remote add origin https://github.com/figlesias7/realforeclose-polk.git
+git add -A
+git commit -m "initial polk setup"
+git branch -M main
+git push -u origin main
+
+del data\event_log.csv
+del data\active_foreclosures.csv
+
+py fetch.py
+py reconcile.py
+git add -A
+git commit -m "first polk data"
+git push
