@@ -6,12 +6,12 @@ import os
 import re
 from datetime import datetime
 from html import escape
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse, parse_qs, unquote
 
 BASE_DOMAIN = "https://pinellas.realforeclose.com"
 CALENDAR_URL = f"{BASE_DOMAIN}/index.cfm?zaction=USER&zmethod=CALENDAR"
 
-# Change this per county if needed
+# Change per county if needed
 PARCEL_LINK_TEMPLATE = "https://pcpao.gov/Parcel-Details/{parcel_id}"
 
 DATA_DIR = "data"
@@ -276,15 +276,27 @@ def build_html(index_files: list[str]) -> None:
 
 def parse_selcaldate(url: str) -> datetime | None:
     try:
+        raw = ""
+
         parsed = urlparse(url)
-        raw = parse_qs(parsed.query).get("selCalDate", [""])[0]
+        qs = parse_qs(parsed.query)
+        raw = qs.get("selCalDate", [""])[0]
+
+        if not raw:
+            m = re.search(r"selCalDate=([^&#]+)", url, re.IGNORECASE)
+            if m:
+                raw = m.group(1)
+
+        raw = unquote(raw).strip()
         if not raw:
             return None
-        for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d"):
+
+        for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d", "%m/%d/%y"):
             try:
                 return datetime.strptime(raw, fmt)
             except ValueError:
-                pass
+                continue
+
         return None
     except Exception:
         return None
@@ -294,25 +306,28 @@ def choose_next_month_url(current_month_url: str, candidate_urls: list[str]) -> 
     current_dt = parse_selcaldate(current_month_url)
     current_key = (current_dt.year, current_dt.month) if current_dt else None
 
-    seen = {}
+    parsed_candidates = []
     for href in candidate_urls:
         dt = parse_selcaldate(href)
-        if not dt:
-            continue
-        key = (dt.year, dt.month)
-        seen[key] = href
+        if dt is not None:
+            parsed_candidates.append(((dt.year, dt.month), href))
 
-    if not seen:
-        return None
+    if parsed_candidates:
+        dedup = {}
+        for key, href in parsed_candidates:
+            dedup[key] = href
 
-    ordered = sorted(seen.items(), key=lambda x: x[0])
+        ordered = sorted(dedup.items(), key=lambda x: x[0])
 
-    if current_key is None:
-        return ordered[0][1]
+        if current_key is None:
+            return ordered[0][1]
 
-    future = [(key, href) for key, href in ordered if key > current_key]
-    if future:
-        return future[0][1]
+        future = [(key, href) for key, href in ordered if key > current_key]
+        if future:
+            return future[0][1]
+
+    if candidate_urls:
+        return candidate_urls[-1]
 
     return None
 
@@ -361,10 +376,18 @@ async def get_month_info(page, current_month_url: str) -> tuple[list[dict], str 
     candidates = []
     for link in links:
         href = (link.get("href") or "").strip()
+        if not href:
+            continue
         if "zmethod=calendar" in href.lower() and "selCalDate=" in href:
             candidates.append(href)
 
     next_month_url = choose_next_month_url(current_month_url, candidates)
+
+    print(f"Candidate calendar links found: {len(candidates)}")
+    if candidates:
+        print("Last candidate:", candidates[-1])
+    print("Chosen next month:", next_month_url)
+
     return days, next_month_url
 
 
