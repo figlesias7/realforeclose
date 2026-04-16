@@ -6,13 +6,9 @@ import os
 import re
 from datetime import datetime
 from html import escape
-from urllib.parse import urlparse, parse_qs
 
-BASE_DOMAIN = "https://pinellas.realforeclose.com"
+BASE_DOMAIN = "https://www.pinellas.realforeclose.com"
 CALENDAR_URL = f"{BASE_DOMAIN}/index.cfm?zaction=USER&zmethod=CALENDAR"
-
-# Change this per county if needed
-PARCEL_LINK_TEMPLATE = "https://pcpao.gov/Parcel-Details/{parcel_id}"
 
 DATA_DIR = "data"
 DOCS_DIR = "docs"
@@ -131,23 +127,13 @@ def parse_waiting_records(section_text: str) -> list[dict]:
             "Case #": case_no,
             "Parcel ID": parcel_id,
             "Case Link": f"{BASE_DOMAIN}/index.cfm?zaction=auction&zmethod=details&AID={case_no}&bypassPage=1",
-            "Parcel Link": PARCEL_LINK_TEMPLATE.format(parcel_id=parcel_id),
+            "Parcel Link": f"https://pcpao.gov/Parcel-Details/{parcel_id}",
         })
 
     return rows
 
 
 def write_daily(rows: list[dict]) -> None:
-    def sort_key(row: dict) -> tuple:
-        raw = row.get("Auction Date", "")
-        try:
-            dt = datetime.strptime(raw, "%m/%d/%Y %I:%M %p ET")
-        except ValueError:
-            dt = datetime.max
-        return (dt, row.get("Case #", ""))
-
-    rows = sorted(rows, key=sort_key)
-
     with open(TODAY_FILE, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow([
@@ -274,50 +260,7 @@ def build_html(index_files: list[str]) -> None:
         f.write(html)
 
 
-def parse_selcaldate(url: str) -> datetime | None:
-    try:
-        parsed = urlparse(url)
-        raw = parse_qs(parsed.query).get("selCalDate", [""])[0]
-        if not raw:
-            return None
-        for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d"):
-            try:
-                return datetime.strptime(raw, fmt)
-            except ValueError:
-                pass
-        return None
-    except Exception:
-        return None
-
-
-def choose_next_month_url(current_month_url: str, candidate_urls: list[str]) -> str | None:
-    current_dt = parse_selcaldate(current_month_url)
-    current_key = (current_dt.year, current_dt.month) if current_dt else None
-
-    seen = {}
-    for href in candidate_urls:
-        dt = parse_selcaldate(href)
-        if not dt:
-            continue
-        key = (dt.year, dt.month)
-        seen[key] = href
-
-    if not seen:
-        return None
-
-    ordered = sorted(seen.items(), key=lambda x: x[0])
-
-    if current_key is None:
-        return ordered[0][1]
-
-    future = [(key, href) for key, href in ordered if key > current_key]
-    if future:
-        return future[0][1]
-
-    return None
-
-
-async def get_month_info(page, current_month_url: str) -> tuple[list[dict], str | None]:
+async def get_month_info(page) -> tuple[list[dict], str | None]:
     boxes = await page.locator(".CALBOX").all()
     days = []
 
@@ -349,6 +292,7 @@ async def get_month_info(page, current_month_url: str) -> tuple[list[dict], str 
             "scheduled": scheduled,
         })
 
+    next_month_url = None
     links = await page.locator("a").evaluate_all(
         """
         els => els.map(a => ({
@@ -357,21 +301,21 @@ async def get_month_info(page, current_month_url: str) -> tuple[list[dict], str 
         }))
         """
     )
-
     candidates = []
     for link in links:
-        href = (link.get("href") or "").strip()
+        href = link["href"]
         if "zmethod=calendar" in href.lower() and "selCalDate=" in href:
             candidates.append(href)
 
-    next_month_url = choose_next_month_url(current_month_url, candidates)
+    if candidates:
+        next_month_url = candidates[-1]
+
     return days, next_month_url
 
 
 async def scrape():
     seen_cases = load_seen()
     all_rows_for_today = []
-    saved_case_nos = set()
     visited_months = set()
 
     async with async_playwright() as p:
@@ -379,23 +323,23 @@ async def scrape():
         page = await browser.new_page()
 
         current_month_url = CALENDAR_URL
-        month_hops = 0
-        max_month_hops = 18
+        empty_month_streak = 0
 
-        while (
-            current_month_url
-            and current_month_url not in visited_months
-            and month_hops < max_month_hops
-        ):
-            month_hops += 1
+        while current_month_url and current_month_url not in visited_months:
             visited_months.add(current_month_url)
 
             await page.goto(current_month_url, wait_until="domcontentloaded")
             await page.wait_for_timeout(4000)
 
-            days, next_month_url = await get_month_info(page, current_month_url)
+            days, next_month_url = await get_month_info(page)
             print(f"Found {len(days)} live foreclosure days in {current_month_url}")
-            print(f"Next month URL: {next_month_url}")
+
+            if not days:
+                empty_month_streak += 1
+                if empty_month_streak >= 1:
+                    break
+            else:
+                empty_month_streak = 0
 
             for item in days:
                 try:
@@ -415,9 +359,8 @@ async def scrape():
 
                     for r in rows:
                         case_no = r["Case #"]
-                        if not case_no or case_no in saved_case_nos:
+                        if not case_no:
                             continue
-                        saved_case_nos.add(case_no)
                         all_rows_for_today.append(r)
                         seen_cases.add(case_no)
 
